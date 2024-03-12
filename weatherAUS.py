@@ -12,12 +12,14 @@ from api import scrapper
 import time
 from api import df_list_loc
 import lightgbm as lgb
+import streamlit as st
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
 pd.set_option('display.float_format', lambda x: '%.3f' % x)
 pd.set_option('display.width', 500)
 
+st.header("The Weather Australia")
 df = pd.read_csv('weatherAUS.csv')
 df.head()
 
