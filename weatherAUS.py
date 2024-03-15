@@ -4,10 +4,11 @@ import requests
 import seaborn as sns
 from lightgbm import LGBMClassifier
 from matplotlib import pyplot as plt
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import RobustScaler, LabelEncoder
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import RobustScaler, LabelEncoder, StandardScaler
 from sklearn.metrics import classification_report
 from api import scrapper
 import time
@@ -163,6 +164,13 @@ def replace_outliers_with_thresholds(dataframe, col_name, q1=0.25, q3=0.75):
     low_limit, up_limit = calculate_outlier_thresholds(dataframe, col_name, q1, q3)
     dataframe.loc[dataframe[col_name] < float(low_limit), col_name] = int(low_limit)
     dataframe.loc[dataframe[col_name] > float(up_limit), col_name] = int(up_limit)
+
+def check_outlier(dataframe, col_name):
+    low_limit, up_limit = calculate_outlier_thresholds(dataframe, col_name)
+    if dataframe[(dataframe[col_name] > up_limit) | (dataframe[col_name] < low_limit)].any(axis=None):
+        return True
+    else:
+        return False
 
 for col in num_cols:
     replace_outliers_with_thresholds(df, col, 0.05, 0.95)
@@ -376,9 +384,9 @@ merged_df.head()
 merged_df = pd.get_dummies(merged_df, columns=["WindDirDom", "Seasons", "Astron_Season", "Climate_Zone"], dtype="int", drop_first=True)
 
 merged_df.head()
-merged_df = merged_df.drop("Unnamed: 0", axis=1)
 
-merged_df.to_csv('merged_df.csv')
+merged_df = merged_df.drop(["Unnamed: 0"], axis=1)
+merged_df.to_csv('merged_df.csv', index=False)
 
 
 merged_df = pd.read_csv('merged_df.csv')
@@ -386,9 +394,26 @@ merged_df = pd.read_csv('merged_df.csv')
 cat_cols, num_cols, cat_but_car = grab_col_names(merged_df)
 
 
-# Standardization
-rs = RobustScaler()
-merged_df[num_cols] = rs.fit_transform(merged_df[num_cols])
+# Separate columns based on their scaling method
+gaussian_columns = []
+non_gaussian_columns = []
+for col in merged_df.select_dtypes(include=['float64', 'int64']).columns:
+    if not check_outlier(merged_df, col):
+        gaussian_columns.append(col)
+    else:
+        non_gaussian_columns.append(col)
+
+# Define a ColumnTransformer to apply different scalers to different columns
+preprocessor = ColumnTransformer([
+    ('standard_scaler', StandardScaler(), gaussian_columns),
+    ('robust_scaler', RobustScaler(), non_gaussian_columns)
+])
+
+# Apply the scaling to the dataset
+scaled_features = preprocessor.fit_transform(merged_df.select_dtypes(include=['float64', 'int64']))
+
+# Replace the original columns with the scaled features
+merged_df[gaussian_columns + non_gaussian_columns] = scaled_features
 merged_df.describe().T
 merged_df.info()
 
@@ -400,13 +425,13 @@ X = merged_df.drop(["RainTomorrow", "Date", "Location"], axis=1)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Model 1: Logistic Regression
-log_reg = LogisticRegression()
+log_reg = LogisticRegression(solver='saga', max_iter=10000)  # 'saga' solver uses stochastic average gradient descent
 log_reg.fit(X_train, y_train)
 y_pred_log_reg = log_reg.predict(X_test)
 print("Logistic Regression:")
 print(classification_report(y_test, y_pred_log_reg))
 
-#Logistic Regression:
+
 """
 Logistic Regression:
               precision    recall  f1-score   support
@@ -454,7 +479,7 @@ weighted avg       0.89      0.89      0.89     29092
 """
 
 
-def plot_importance(model, features, num=len(X)):
+def plot_importance(model, features, num=len(X), save_path=None):
     if hasattr(model, 'feature_importances_'):
         feature_imp = pd.DataFrame({'Value': model.feature_importances_, 'Feature': features.columns})
     else:
@@ -466,9 +491,90 @@ def plot_importance(model, features, num=len(X)):
     plt.title('Features')
     plt.tight_layout()
 
-plot_importance(log_reg, X)
+    if save_path:
+        plt.savefig(save_path, format='png')
 
-plot_importance(rf_classifier, X)
+plot_importance(log_reg, X, len(X), "log_reg.png")
 
-plot_importance(lgb_classifier, X)
+plot_importance(rf_classifier, X, len(X), "rf_classifier.png")
+
+plot_importance(lgb_classifier, X, len(X), "lgb_classifier.png")
+
+# Hyperparameter optimization for Logistic Regression
+log_reg_params = {'C': [0.001, 0.01, 0.1, 1, 10, 100, 1000]}
+log_reg_grid = GridSearchCV(log_reg, log_reg_params, cv=5)
+log_reg_grid.fit(X_train, y_train)
+print("Best parameters for Logistic Regression:", log_reg_grid.best_params_)
+
+# Train a Logistic Regression model with the best parameters
+best_log_reg = LogisticRegression(**log_reg_grid.best_params_)
+best_log_reg.fit(X_train, y_train)
+
+# Display classification report for Logistic Regression
+log_reg_pred = best_log_reg.predict(X_test)
+print("Classification Report for Logistic Regression:")
+print(classification_report(y_test, log_reg_pred))
+
+"""
+Classification Report for Logistic Regression:
+              precision    recall  f1-score   support
+         0.0       0.90      0.96      0.93     22672
+         1.0       0.80      0.61      0.69      6420
+    accuracy                           0.88     29092
+   macro avg       0.85      0.78      0.81     29092
+weighted avg       0.87      0.88      0.87     29092
+"""
+# Hyperparameter optimization for Random Forest Classifier
+
+rf_params = {'n_estimators': [50, 100, 200, 300],
+             'max_depth': [None, 5, 10, 20]}
+rf_grid = GridSearchCV(rf_classifier, rf_params, cv=5)
+rf_grid.fit(X_train, y_train)
+print("Best parameters for Random Forest Classifier:", rf_grid.best_params_)
+
+# Train a Random Forest Classifier model with the best parameters
+best_rf = RandomForestClassifier(**rf_grid.best_params_)
+best_rf.fit(X_train, y_train)
+
+# Display classification report for Random Forest Classifier
+rf_pred = best_rf.predict(X_test)
+print("Classification Report for Random Forest Classifier:")
+print(classification_report(y_test, rf_pred))
+"""
+Best parameters for Random Forest Classifier: {'max_depth': None, 'n_estimators': 300}
+Classification Report for Random Forest Classifier:
+              precision    recall  f1-score   support
+         0.0       0.91      0.95      0.93     22672
+         1.0       0.80      0.69      0.74      6420
+    accuracy                           0.89     29092
+   macro avg       0.86      0.82      0.83     29092
+weighted avg       0.89      0.89      0.89     29092
+"""
+# Hyperparameter optimization for LightGBM Classifier
+
+lgbm_params = {'n_estimators': [50, 100, 200, 300],
+               'learning_rate': [0.001, 0.01, 0.1, 1]}
+lgbm_grid = GridSearchCV(lgb_classifier, lgbm_params, cv=5)
+lgbm_grid.fit(X_train, y_train)
+print("Best parameters for LightGBM Classifier:", lgbm_grid.best_params_)
+
+# Train a LightGBM Classifier model with the best parameters
+best_lgbm = LGBMClassifier(**lgbm_grid.best_params_)
+best_lgbm.fit(X_train, y_train)
+
+# Display classification report for LightGBM Classifier
+lgbm_pred = best_lgbm.predict(X_test)
+print("Classification Report for LightGBM Classifier:")
+print(classification_report(y_test, lgbm_pred))
+
+"""
+Best parameters for LightGBM Classifier: {'learning_rate': 0.1, 'n_estimators': 300}
+Classification Report for LightGBM Classifier:
+              precision    recall  f1-score   support
+         0.0       0.92      0.95      0.93     22672
+         1.0       0.79      0.70      0.75      6420
+    accuracy                           0.89     29092
+   macro avg       0.86      0.83      0.84     29092
+weighted avg       0.89      0.89      0.89     29092
+"""
 
