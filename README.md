@@ -37,13 +37,13 @@ Feel free to use this dataset for research, analysis, or machine learning projec
 
 ## Models Used
 - **Logistic Regression:** A simple linear model used for binary classification tasks.
-- Logistic Regression:
+- """Logistic Regression:
               precision    recall  f1-score   support
            0       0.90      0.96      0.93     22672
            1       0.80      0.61      0.69      6420
     accuracy                           0.88     29092
    macro avg       0.85      0.78      0.81     29092
-weighted avg       0.87      0.88      0.87     29092
+weighted avg       0.87      0.88      0.87     29092"""
 
 - **Random Forest Classifier:** An ensemble learning method based on decision trees, known for its robustness and accuracy.
 - Random Forest Classifier:
